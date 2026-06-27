@@ -40,6 +40,59 @@ function normalizeEmail(email: string): string {
   return email.toLowerCase().trim();
 }
 
+function normalizeFrontendSex(sex: any) {
+  if (sex === 'Male') return 'MALE';
+  if (sex === 'Female') return 'FEMALE';
+  if (sex === 'Prefer not to say') return 'PREFER_NOT_TO_SAY';
+  return sex;
+}
+
+function normalizeFrontendStatus(status: any) {
+  if (status === 'available') return UserStatus.ACTIVE;
+  if (status === 'unavailable') return UserStatus.INACTIVE;
+  return status;
+}
+
+function toFrontendStatus(status: UserStatus): 'available' | 'unavailable' {
+  return status === UserStatus.ACTIVE ? 'available' : 'unavailable';
+}
+
+function resolveDateOfBirth(input: { dateOfBirth?: Date; dob?: Date }) {
+  return input.dateOfBirth ?? input.dob;
+}
+
+function resolveOwnsCar(input: { ownsCar?: boolean; vehicle?: string }) {
+  if (input.ownsCar !== undefined) return input.ownsCar;
+  if (input.vehicle === 'Yes, owns a vehicle') return true;
+  if (input.vehicle === 'No vehicle') return false;
+  return undefined;
+}
+
+function serializeStaff(staff: any) {
+  const profile = staff.staffProfile ?? {};
+  const firstName = profile.firstName ?? '';
+  const lastName = profile.lastName ?? '';
+  return {
+    id: staff.id,
+    staffCode: staff.staffCode,
+    firstName,
+    lastName,
+    name: [firstName, lastName].filter(Boolean).join(' ').trim(),
+    email: staff.email,
+    phone: profile.phone ?? '',
+    status: toFrontendStatus(staff.status),
+    photo: profile.photoUrl ?? null,
+    role: profile.staffRoleLabel ?? 'Home-Help & Support Assistant',
+    dob: profile.dateOfBirth ? profile.dateOfBirth.toISOString() : '',
+    sex: profile.sex === 'MALE' ? 'Male' : profile.sex === 'FEMALE' ? 'Female' : profile.sex === 'PREFER_NOT_TO_SAY' ? 'Prefer not to say' : profile.sex ?? '',
+    zone: profile.zone ?? '',
+    vehicle: profile.ownsCar ? 'Yes, owns a vehicle' : 'No vehicle',
+    address: profile.address ?? '',
+    cv: profile.cvFileUrl ?? null,
+    documents: []
+  };
+}
+
 
 function toEmailToken(value: string): string {
   return value
@@ -523,7 +576,7 @@ async function listStaff(filters: StaffListQuery) {
 
   const where: Prisma.UserWhereInput = {
     role: Role.STAFF,
-    status: filters.status
+    status: normalizeFrontendStatus(filters.status)
   };
 
   const [total, items] = await Promise.all([
@@ -547,7 +600,12 @@ async function listStaff(filters: StaffListQuery) {
     })
   ]);
 
-  return buildPaginatedResult(items, total, page, limit);
+  const serialized = items.map(serializeStaff);
+
+  return {
+    ...buildPaginatedResult(serialized, total, page, limit),
+    data: serialized
+  };
 }
 
 async function createStaff(input: CreateStaffInput) {
@@ -561,25 +619,25 @@ async function createStaff(input: CreateStaffInput) {
     throw new ApiError(409, 'A user with this email already exists');
   }
 
-  const passwordHash = await hashPassword(input.password);
+  const passwordHash = await hashPassword(input.password ?? generateTempPassword());
   const staffCode = await generateNextStaffCode(Role.STAFF);
 
-  return db.user.create({
+  const createdStaff = await db.user.create({
     data: {
       email: normalizedEmail,
       staffCode,
       passwordHash,
       role: Role.STAFF,
-      status: input.status ?? UserStatus.ACTIVE,
+      status: normalizeFrontendStatus(input.status) ?? UserStatus.ACTIVE,
       staffProfile: {
         create: {
           firstName: input.firstName,
           lastName: input.lastName,
           phone: input.phone,
-          dateOfBirth: input.dateOfBirth ?? null,
-          sex: input.sex ?? null,
+          dateOfBirth: resolveDateOfBirth(input) ?? null,
+          sex: normalizeFrontendSex(input.sex) ?? null,
           zone: input.zone ?? null,
-          ownsCar: input.ownsCar ?? false,
+          ownsCar: resolveOwnsCar(input) ?? false,
           address: input.address ?? null,
           city: input.city ?? null,
           zipcode: input.zipcode ?? null,
@@ -588,7 +646,7 @@ async function createStaff(input: CreateStaffInput) {
           emergencyContactRelationship: input.emergencyContactRelationship ?? null,
           photoUrl: input.photoUrl ?? null,
           cvFileUrl: input.cvFileUrl ?? null,
-          staffRoleLabel: input.staffRoleLabel ?? 'HOME_HELP_SUPPORT_ASSISTANT',
+          staffRoleLabel: (input as any).staffRoleLabel ?? (input as any).role ?? 'Home-Help & Support Assistant',
           summary: input.summary ?? null,
           skills: input.skills ?? null
         }
@@ -604,6 +662,8 @@ async function createStaff(input: CreateStaffInput) {
       staffProfile: true
     }
   });
+
+  return serializeStaff(createdStaff);
 }
 
 async function getStaffById(id: string) {
@@ -629,7 +689,7 @@ async function getStaffById(id: string) {
     throw new ApiError(404, 'Staff user not found');
   }
 
-  return staff;
+  return serializeStaff(staff);
 }
 
 
@@ -727,6 +787,54 @@ async function provisionStaffCredentials(id: string, actorUserId: string) {
   };
 }
 
+
+async function saveStaffCredentials(id: string, input: any, actorUserId: string) {
+  if (!input?.workEmail && !input?.password) {
+    return provisionStaffCredentials(id, actorUserId);
+  }
+
+  const staff = await db.user.findFirst({
+    where: { id, role: Role.STAFF },
+    select: { id: true }
+  });
+
+  if (!staff) {
+    throw new ApiError(404, 'Staff user not found');
+  }
+
+  const data: any = {};
+  if (input.workEmail) data.email = normalizeEmail(input.workEmail);
+  if (input.password) data.passwordHash = await hashPassword(input.password);
+
+  if (data.email) {
+    const emailExists = await db.user.findFirst({
+      where: { email: data.email, id: { not: id } },
+      select: { id: true }
+    });
+    if (emailExists) {
+      throw new ApiError(409, 'A user with this email already exists');
+    }
+  }
+
+  await db.$transaction([
+    db.user.update({ where: { id }, data }),
+    db.refreshToken.updateMany({
+      where: { userId: id, revokedAt: null },
+      data: { revokedAt: new Date() }
+    })
+  ]);
+
+  await recordAuditLog({
+    actorUserId,
+    action: 'UPDATE',
+    entity: 'staff_credentials',
+    entityId: id,
+    metadataJson: { emailUpdated: Boolean(input.workEmail), passwordUpdated: Boolean(input.password) }
+  });
+
+  return { id, email: data.email, credentialsSaved: true };
+}
+
 async function resetStaffPassword(id: string, input: ResetStaffPasswordInput) {
   const staff = await db.user.findFirst({
     where: {
@@ -779,16 +887,18 @@ async function updateStaff(id: string, input: UpdateStaffInput) {
 
   const userData: any = {};
   if (normalizedEmail !== undefined) userData.email = normalizedEmail;
-  if (input.status !== undefined) userData.status = input.status;
+  if (input.status !== undefined) userData.status = normalizeFrontendStatus(input.status);
 
   const hasProfileUpdates =
     input.firstName !== undefined ||
     input.lastName !== undefined ||
     input.phone !== undefined ||
     input.dateOfBirth !== undefined ||
+    input.dob !== undefined ||
     input.sex !== undefined ||
     input.zone !== undefined ||
     input.ownsCar !== undefined ||
+    input.vehicle !== undefined ||
     input.address !== undefined ||
     input.city !== undefined ||
     input.zipcode !== undefined ||
@@ -797,7 +907,8 @@ async function updateStaff(id: string, input: UpdateStaffInput) {
     input.emergencyContactRelationship !== undefined ||
     input.photoUrl !== undefined ||
     input.cvFileUrl !== undefined ||
-    input.staffRoleLabel !== undefined ||
+    (input as any).staffRoleLabel !== undefined ||
+    (input as any).role !== undefined ||
     input.summary !== undefined ||
     input.skills !== undefined;
 
@@ -807,10 +918,10 @@ async function updateStaff(id: string, input: UpdateStaffInput) {
       if (input.firstName !== undefined) profileData.firstName = input.firstName;
       if (input.lastName !== undefined) profileData.lastName = input.lastName;
       if (input.phone !== undefined) profileData.phone = input.phone;
-      if (input.dateOfBirth !== undefined) profileData.dateOfBirth = input.dateOfBirth;
-      if (input.sex !== undefined) profileData.sex = input.sex;
+      if (input.dateOfBirth !== undefined || input.dob !== undefined) profileData.dateOfBirth = resolveDateOfBirth(input) ?? null;
+      if (input.sex !== undefined) profileData.sex = normalizeFrontendSex(input.sex);
       if (input.zone !== undefined) profileData.zone = input.zone;
-      if (input.ownsCar !== undefined) profileData.ownsCar = input.ownsCar;
+      if (input.ownsCar !== undefined || input.vehicle !== undefined) profileData.ownsCar = resolveOwnsCar(input);
       if (input.address !== undefined) profileData.address = input.address;
       if (input.city !== undefined) profileData.city = input.city;
       if (input.zipcode !== undefined) profileData.zipcode = input.zipcode;
@@ -825,7 +936,9 @@ async function updateStaff(id: string, input: UpdateStaffInput) {
       }
       if (input.photoUrl !== undefined) profileData.photoUrl = input.photoUrl;
       if (input.cvFileUrl !== undefined) profileData.cvFileUrl = input.cvFileUrl;
-      if (input.staffRoleLabel !== undefined) profileData.staffRoleLabel = input.staffRoleLabel;
+      if ((input as any).staffRoleLabel !== undefined || (input as any).role !== undefined) {
+        profileData.staffRoleLabel = (input as any).staffRoleLabel ?? (input as any).role;
+      }
       if (input.summary !== undefined) profileData.summary = input.summary;
       if (input.skills !== undefined) profileData.skills = input.skills;
 
@@ -845,10 +958,10 @@ async function updateStaff(id: string, input: UpdateStaffInput) {
           firstName: input.firstName,
           lastName: input.lastName,
           phone: input.phone,
-          dateOfBirth: input.dateOfBirth ?? null,
-          sex: input.sex ?? null,
+          dateOfBirth: resolveDateOfBirth(input) ?? null,
+          sex: normalizeFrontendSex(input.sex) ?? null,
           zone: input.zone ?? null,
-          ownsCar: input.ownsCar ?? false,
+          ownsCar: resolveOwnsCar(input) ?? false,
           address: input.address ?? null,
           city: input.city ?? null,
           zipcode: input.zipcode ?? null,
@@ -857,7 +970,7 @@ async function updateStaff(id: string, input: UpdateStaffInput) {
           emergencyContactRelationship: input.emergencyContactRelationship ?? null,
           photoUrl: input.photoUrl ?? null,
           cvFileUrl: input.cvFileUrl ?? null,
-          staffRoleLabel: input.staffRoleLabel ?? 'HOME_HELP_SUPPORT_ASSISTANT',
+          staffRoleLabel: (input as any).staffRoleLabel ?? (input as any).role ?? 'Home-Help & Support Assistant',
           summary: input.summary ?? null,
           skills: input.skills ?? null
         }
@@ -869,7 +982,7 @@ async function updateStaff(id: string, input: UpdateStaffInput) {
     throw new ApiError(400, 'At least one valid field must be provided for update');
   }
 
-  return db.user.update({
+  const updatedStaff = await db.user.update({
     where: { id },
     data: userData,
     select: {
@@ -884,6 +997,8 @@ async function updateStaff(id: string, input: UpdateStaffInput) {
       staffProfile: true
     }
   });
+
+  return serializeStaff(updatedStaff);
 }
 
 async function deleteStaff(id: string) {
@@ -932,7 +1047,7 @@ async function listRecruitmentApplications(filters: RecruitmentListQuery) {
   const skip = (page - 1) * limit;
 
   const where: Prisma.WorkerApplicationWhereInput = {
-    status: filters.status
+    status: normalizeFrontendStatus(filters.status)
   };
 
   const [total, items] = await Promise.all([
@@ -1080,7 +1195,7 @@ async function convertApplicationToStaff(
     throw new ApiError(409, 'A user with this email already exists');
   }
 
-  const passwordHash = await hashPassword(input.password);
+  const passwordHash = await hashPassword(input.password ?? generateTempPassword());
   const staffCode = await generateNextStaffCode(Role.STAFF);
 
   return db.$transaction(async (tx: any) => {
@@ -1140,6 +1255,7 @@ export const adminService = {
   createStaff,
   getStaffById,
   provisionStaffCredentials,
+  saveStaffCredentials,
   resetStaffPassword,
   updateStaff,
   deleteStaff,

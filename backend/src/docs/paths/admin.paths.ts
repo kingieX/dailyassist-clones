@@ -49,36 +49,61 @@ const createClientSchema: OpenAPIV3.SchemaObject = {
   required: ['firstName', 'lastName', 'phone']
 };
 
+const staffRoleOptions = [
+  'Home-Help & Support Assistant',
+  'Senior Carer',
+  'Support Worker',
+  'Community Access Support',
+  'Care Assistant'
+];
+const staffZoneOptions = ['Canvey Island', 'Basildon', 'Southend-on-Sea', 'Chelmsford', 'Rayleigh'];
+const staffVehicleOptions = ['Yes, owns a vehicle', 'No vehicle'];
+const staffSexOptions = ['Male', 'Female', 'Prefer not to say'];
+
 const staffProfileSchema: OpenAPIV3.SchemaObject = {
   type: 'object',
   properties: {
-    email: { type: 'string', format: 'email' },
-    password: { type: 'string', minLength: 8, description: 'Must include at least one uppercase letter and one number.' },
-    status: { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'SUSPENDED'] },
     firstName: { type: 'string' },
     lastName: { type: 'string' },
+    email: { type: 'string', format: 'email' },
     phone: { type: 'string' },
-    dateOfBirth: { type: 'string', format: 'date-time' },
-    sex: { type: 'string', enum: ['MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY'] },
-    zone: { type: 'string' },
-    ownsCar: { type: 'boolean' },
+    role: { type: 'string', enum: staffRoleOptions },
+    dob: { type: 'string', description: 'Free-text DOB; parseable values are stored.' },
+    sex: { type: 'string', enum: staffSexOptions },
+    zone: { type: 'string', enum: staffZoneOptions },
+    vehicle: { type: 'string', enum: staffVehicleOptions },
     address: { type: 'string' },
-    city: { type: 'string' },
-    zipcode: { type: 'string' },
-    emergencyContactName: { type: 'string' },
-    emergencyContactPhone: { type: 'string' },
-    emergencyContactRelationship: { type: 'string' },
-    photoUrl: { type: 'string', format: 'uri' },
-    cvFileUrl: { type: 'string', format: 'uri' },
-    staffRoleLabel: { type: 'string', enum: ['HOME_HELP_SUPPORT_ASSISTANT', 'ADMIN'] },
-    summary: { type: 'string', maxLength: 2000 },
-    skills: { type: 'string', maxLength: 2000 }
+    status: { type: 'string', enum: ['available', 'unavailable'] },
+    photo: { type: 'string', format: 'binary' },
+    cv: { type: 'string', format: 'binary' }
   }
 };
 
 const createStaffSchema: OpenAPIV3.SchemaObject = {
   ...staffProfileSchema,
-  required: ['email', 'password', 'firstName', 'lastName', 'phone']
+  required: ['firstName', 'lastName', 'email', 'phone', 'role', 'dob', 'sex', 'zone', 'vehicle']
+};
+
+const staffResponseSchema: OpenAPIV3.SchemaObject = {
+  type: 'object',
+  properties: {
+    id: { type: 'string' },
+    staffCode: { type: 'string' },
+    firstName: { type: 'string' },
+    lastName: { type: 'string' },
+    name: { type: 'string' },
+    email: { type: 'string', format: 'email' },
+    phone: { type: 'string' },
+    status: { type: 'string', enum: ['available', 'unavailable'] },
+    photo: { type: 'string', nullable: true },
+    role: { type: 'string', enum: staffRoleOptions },
+    dob: { type: 'string' },
+    sex: { type: 'string', enum: staffSexOptions },
+    zone: { type: 'string', enum: staffZoneOptions },
+    vehicle: { type: 'string', enum: staffVehicleOptions },
+    address: { type: 'string' },
+    documents: { type: 'array', items: { type: 'object' } }
+  }
 };
 
 export const adminPaths: OpenAPIV3.PathsObject = {
@@ -349,7 +374,7 @@ export const adminPaths: OpenAPIV3.PathsObject = {
         {
           name: 'status',
           in: 'query',
-          schema: { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'SUSPENDED'] }
+          schema: { type: 'string', enum: ['available', 'unavailable'] }
         },
         {
           name: 'sortBy',
@@ -368,8 +393,8 @@ export const adminPaths: OpenAPIV3.PathsObject = {
       tags: ['Admin — Staff'],
       summary: 'Create staff profile (with operational fields and initial credentials)',
       security: adminSecurity,
-      requestBody: { required: true, content: { 'application/json': { schema: createStaffSchema, example: { email: 'staff@example.com', password: 'StaffPass1', firstName: 'Alice', lastName: 'Smith', phone: '+44 1268 904 508', staffRoleLabel: 'HOME_HELP_SUPPORT_ASSISTANT' } } } },
-      responses: { '201': { description: 'Staff created' } }
+      requestBody: { required: true, content: { 'multipart/form-data': { schema: createStaffSchema } } },
+      responses: { '201': { description: 'Staff created', content: { 'application/json': { schema: staffResponseSchema } } }, '400': { $ref: '#/components/responses/BadRequestError' } }
     }
   },
   '/admin/staff/{id}': {
@@ -380,13 +405,21 @@ export const adminPaths: OpenAPIV3.PathsObject = {
       parameters: [idParam],
       responses: { '200': { description: 'Staff retrieved' } }
     },
+    post: {
+      tags: ['Admin — Staff'],
+      summary: 'Save or provision staff credentials',
+      security: adminSecurity,
+      parameters: [idParam],
+      requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: { workEmail: { type: 'string', format: 'email' }, password: { type: 'string' } } } } } },
+      responses: { '200': { description: 'Staff credentials saved' } }
+    },
     patch: {
       tags: ['Admin — Staff'],
       summary: 'Update staff',
       security: adminSecurity,
       parameters: [idParam],
-      requestBody: { required: true, content: { 'application/json': { schema: staffProfileSchema, example: { phone: '+44 1268 904 508', zone: 'Canvey Island', ownsCar: true } } } },
-      responses: { '200': { description: 'Staff updated' } }
+      requestBody: { required: true, content: { 'multipart/form-data': { schema: staffProfileSchema } } },
+      responses: { '200': { description: 'Staff updated', content: { 'application/json': { schema: staffResponseSchema } } } }
     },
     delete: {
       tags: ['Admin — Staff'],

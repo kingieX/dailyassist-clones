@@ -29,8 +29,26 @@ const paginationSchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).default(20)
 });
 
-const sexSchema = z.enum(['MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY']);
-const staffRoleLabelSchema = z.enum(['HOME_HELP_SUPPORT_ASSISTANT', 'ADMIN']);
+const sexSchema = z.enum(['MALE', 'FEMALE', 'OTHER', 'PREFER_NOT_TO_SAY', 'Male', 'Female', 'Prefer not to say']);
+const staffRoleLabelSchema = z.enum([
+  'HOME_HELP_SUPPORT_ASSISTANT',
+  'ADMIN',
+  'Home-Help & Support Assistant',
+  'Senior Carer',
+  'Support Worker',
+  'Community Access Support',
+  'Care Assistant'
+]);
+const staffZoneSchema = z.enum(['Canvey Island', 'Basildon', 'Southend-on-Sea', 'Chelmsford', 'Rayleigh']);
+const vehicleSchema = z.enum(['Yes, owns a vehicle', 'No vehicle']);
+const frontendStatusSchema = z.enum(['available', 'unavailable']);
+const dobSchema = z.preprocess((value) => {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? undefined : parsed;
+}, z.date().optional());
 
 const passwordSchema = z
   .string()
@@ -115,20 +133,22 @@ export const updateClientSchema = createClientSchema
 const staffSortBySchema = z.enum(['createdAt', 'updatedAt', 'lastLoginAt', 'email', 'staffCode']).default('createdAt');
 
 export const staffListQuerySchema = paginationSchema.extend({
-  status: z.nativeEnum(UserStatus).optional(),
+  status: z.union([z.nativeEnum(UserStatus), frontendStatusSchema]).optional(),
   sortBy: staffSortBySchema,
   sortOrder: sortOrderSchema
 });
 
 export const createStaffSchema = z.object({
   email: z.string().trim().email('Invalid email format'),
-  password: passwordSchema,
+  password: passwordSchema.optional(),
   firstName: z.string().trim().min(1, 'First name is required'),
   lastName: z.string().trim().min(1, 'Last name is required'),
   phone: z.string().trim().min(7, 'Phone number is required'),
   dateOfBirth: z.coerce.date().optional(),
+  dob: dobSchema,
   sex: sexSchema.optional(),
-  zone: optionalTrimmedString,
+  zone: staffZoneSchema.optional(),
+  vehicle: vehicleSchema.optional(),
   ownsCar: z.coerce.boolean().optional(),
   address: optionalTrimmedString,
   city: optionalTrimmedString,
@@ -136,12 +156,13 @@ export const createStaffSchema = z.object({
   emergencyContactName: optionalTrimmedString,
   emergencyContactPhone: optionalTrimmedString,
   emergencyContactRelationship: optionalTrimmedString,
-  photoUrl: z.string().url('Photo URL must be valid').optional(),
-  cvFileUrl: z.string().url('CV URL must be valid').optional(),
+  photoUrl: optionalTrimmedString,
+  cvFileUrl: optionalTrimmedString,
+  role: staffRoleLabelSchema.optional(),
   staffRoleLabel: staffRoleLabelSchema.optional(),
   summary: z.string().trim().max(2000).optional(),
   skills: z.string().trim().max(2000).optional(),
-  status: z.nativeEnum(UserStatus).optional()
+  status: z.union([z.nativeEnum(UserStatus), frontendStatusSchema]).optional()
 });
 
 export const resetStaffPasswordSchema = z.object({
@@ -151,13 +172,15 @@ export const resetStaffPasswordSchema = z.object({
 export const updateStaffSchema = z
   .object({
     email: optionalEmail,
-    status: z.nativeEnum(UserStatus).optional(),
+    status: z.union([z.nativeEnum(UserStatus), frontendStatusSchema]).optional(),
     firstName: optionalTrimmedString,
     lastName: optionalTrimmedString,
     phone: optionalTrimmedString,
     dateOfBirth: z.coerce.date().optional(),
+    dob: dobSchema,
     sex: sexSchema.optional(),
-    zone: optionalTrimmedString,
+    zone: staffZoneSchema.optional(),
+    vehicle: vehicleSchema.optional(),
     ownsCar: z.coerce.boolean().optional(),
     address: optionalTrimmedString,
     city: optionalTrimmedString,
@@ -165,8 +188,9 @@ export const updateStaffSchema = z
     emergencyContactName: optionalTrimmedString,
     emergencyContactPhone: optionalTrimmedString,
     emergencyContactRelationship: optionalTrimmedString,
-    photoUrl: z.string().url('Photo URL must be valid').optional(),
-    cvFileUrl: z.string().url('CV URL must be valid').optional(),
+    photoUrl: optionalTrimmedString,
+    cvFileUrl: optionalTrimmedString,
+    role: staffRoleLabelSchema.optional(),
     staffRoleLabel: staffRoleLabelSchema.optional(),
     summary: z.string().trim().max(2000).optional(),
     skills: z.string().trim().max(2000).optional()

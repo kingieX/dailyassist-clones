@@ -106,6 +106,16 @@ const provisionStaffCredentials = asyncHandler(async (req: Request, res: Respons
   return sendSuccess(res, 200, 'Staff credentials provisioned successfully', result);
 });
 
+
+const saveStaffCredentials = asyncHandler(async (req: Request, res: Response) => {
+  const result = await adminService.saveStaffCredentials(
+    req.params.id as string,
+    req.body,
+    getActorUserId(req)
+  );
+  return sendSuccess(res, 200, 'Staff credentials saved successfully', result);
+});
+
 const resetStaffPassword = asyncHandler(async (req: Request, res: Response) => {
   const result = await adminService.resetStaffPassword(req.params.id as string, req.body);
   return sendSuccess(res, 200, 'Staff password reset successfully', result);
@@ -168,6 +178,7 @@ export const adminController = {
   createStaff,
   getStaffById,
   provisionStaffCredentials,
+  saveStaffCredentials,
   resetStaffPassword,
   updateStaff,
   deleteStaff,
